@@ -1,0 +1,46 @@
+name: Notify Rebase Ready
+
+# 当 Copilot 的冲突解决 PR 通过 CI 后通知你
+on:
+  check_suite:
+    types: [completed]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  notify-on-copilot-pr-ready:
+    if: >-
+      github.event.check_suite.conclusion == 'success' &&
+      startsWith(github.event.check_suite.head_branch, 'conflict/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find and comment on PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          BRANCH="${{ github.event.check_suite.head_branch }}"
+
+          PR_NUMBER=$(gh pr list \
+            --repo ${{ github.repository }} \
+            --head "$BRANCH" \
+            --json number \
+            --jq '.[0].number' 2>/dev/null || echo "")
+
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "No PR found for branch $BRANCH"
+            exit 0
+          fi
+
+          gh pr comment "$PR_NUMBER" \
+            --repo ${{ github.repository }} \
+            --body "## CI Passed - Rebase Ready
+
+          Copilot 已解决冲突，CI 通过。
+
+          **下一步：**
+          1. Review PR 改动
+          2. Merge 后将分支内容同步到主分支
+
+          @${{ github.repository_owner }}"

@@ -1,0 +1,423 @@
+name: Weekly Rebase
+
+# 每周四自动执行 rebase，失败时交给 Copilot Cloud Agent 处理
+on:
+  schedule:
+    - cron: '0 2 * * 4'  # 每周四 UTC 02:00
+  workflow_dispatch:
+    inputs:
+      repo_target:
+        description: 'Which repo to rebase (all / torch / torch-xpu-ops / torch-xpu-ops-dev)'
+        required: false
+        default: 'all'
+      copilot_model:
+        description: 'AI model for Copilot (empty=Auto, claude-sonnet-4.5, claude-opus-4.7, gpt-5.2-codex)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  COPILOT_BOT: copilot-swe-agent[bot]
+
+jobs:
+  # ============================================================
+  # Job 1: Rebase frameworks.ai.pytorch.private-gpu (master_next)
+  # ============================================================
+  rebase-torch:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event.inputs.repo_target == 'all' ||
+      github.event.inputs.repo_target == 'torch'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ORG: intel-innersource
+      TARGET_REPO: frameworks.ai.pytorch.private-gpu
+      BRANCH_NAME: master_next
+      UPSTREAM_REPO: https://github.com/pytorch/pytorch.git
+      UPSTREAM_REF: upstream/main
+    steps:
+      - name: Checkout tooling repo
+        uses: actions/checkout@v4
+
+      - name: Setup Git
+        run: |
+          git config --global user.name "rebase-bot"
+          git config --global user.email "rebase-bot@noreply.github.com"
+
+      - name: Clone target repo
+        run: |
+          git clone https://${{ secrets.GH_TOKEN }}@github.com/${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}.git
+          cd ${{ env.TARGET_REPO }}
+          git remote add upstream ${{ env.UPSTREAM_REPO }}
+          git fetch upstream
+
+      - name: Attempt rebase
+        id: rebase
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          DATE_TAG=$(date +%Y%m%d)
+          REBASE_BRANCH="rebase_${DATE_TAG}"
+          git checkout -b "$REBASE_BRANCH"
+          echo "rebase_branch=$REBASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "date_tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+
+          if bash ../scripts/rebase_with_conflict_report.sh \
+            "${{ env.TARGET_REPO }}" \
+            "${{ env.BRANCH_NAME }}" \
+            "${{ env.UPSTREAM_REF }}" \
+            "$REBASE_BRANCH" \
+            "/tmp/conflict_report.md"; then
+            echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- 成功：push + 开 PR ---
+      - name: Push rebase branch
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          git push origin "${{ steps.rebase.outputs.rebase_branch }}"
+
+      - name: Create rebase PR
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          gh pr create \
+            --title "Weekly rebase onto upstream/main (${{ steps.rebase.outputs.rebase_branch }})" \
+            --body "Automated weekly rebase. All conflicts auto-resolved." \
+            --base "${{ env.BRANCH_NAME }}" \
+            --head "${{ steps.rebase.outputs.rebase_branch }}"
+
+      # --- 失败：建冲突分支 → 创建 Issue → Copilot 接手 ---
+      - name: Prepare conflict branch (merge with markers)
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        id: conflict
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          git rebase --abort 2>/dev/null || true
+
+          CONFLICT_BRANCH="conflict/rebase_${{ steps.rebase.outputs.date_tag }}"
+          git checkout "${{ env.BRANCH_NAME }}"
+          git checkout -b "$CONFLICT_BRANCH"
+          # 用 merge 保留冲突标记，Copilot 可以直接编辑解决
+          git merge "${{ env.UPSTREAM_REF }}" --no-commit --no-ff || true
+          git add -A
+          git commit -m "WIP: upstream merge conflicts $(date +%Y%m%d) - for Copilot" --allow-empty
+          git push origin "$CONFLICT_BRANCH"
+          echo "conflict_branch=$CONFLICT_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Create Issue → assign Copilot Cloud Agent
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          COPILOT_MODEL: ${{ github.event.inputs.copilot_model || '' }}
+        run: |
+          REPORT=$(cat /tmp/conflict_report.md 2>/dev/null || echo "冲突详情不可用")
+          CONFLICT_BRANCH="${{ steps.conflict.outputs.conflict_branch }}"
+          DATE_TAG="${{ steps.rebase.outputs.date_tag }}"
+
+          # Issue body - 给 Copilot 的完整指令
+          read -r -d '' BODY << 'ISSUE_BODY' || true
+          ## Weekly Rebase 冲突需要解决
+
+          **仓库:** `TARGET_ORG/TARGET_REPO`
+          **源分支:** `BRANCH_NAME`
+          **Upstream:** `UPSTREAM_REF` (pytorch/pytorch main)
+          **冲突分支:** `CONFLICT_BRANCH_PLACEHOLDER`
+
+          ### 冲突详情
+
+          REPORT_PLACEHOLDER
+
+          ### 解决要求
+
+          1. 在 `CONFLICT_BRANCH_PLACEHOLDER` 分支上解决所有冲突标记 (`<<<<<<<`, `=======`, `>>>>>>>`)
+          2. **优先保留 upstream 的改动**
+          3. **保留所有 Intel/XPU 特有代码**（SYCL、XPU backend、Intel 自定义 op 等）
+          4. 如果两边都有有意义的改动，合并它们
+          5. 确保代码能编译通过
+          6. 完成后开 PR，target 分支为 `BRANCH_NAME`，标题: `Weekly rebase DATE_TAG - conflict resolution`
+          ISSUE_BODY
+
+          # 替换占位符
+          BODY="${BODY//TARGET_ORG/${{ env.TARGET_ORG }}}"
+          BODY="${BODY//TARGET_REPO/${{ env.TARGET_REPO }}}"
+          BODY="${BODY//BRANCH_NAME/${{ env.BRANCH_NAME }}}"
+          BODY="${BODY//UPSTREAM_REF/${{ env.UPSTREAM_REF }}}"
+          BODY="${BODY//CONFLICT_BRANCH_PLACEHOLDER/$CONFLICT_BRANCH}"
+          BODY="${BODY//REPORT_PLACEHOLDER/$REPORT}"
+          BODY="${BODY//DATE_TAG/$DATE_TAG}"
+
+          # 通过 REST API 创建 Issue 并通过 agent_assignment 分配给 Copilot
+          BODY_JSON=$(echo "$BODY" | jq -Rs .)
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}/issues" \
+            --input - <<EOF
+          {
+            "title": "[Auto Rebase] 冲突解决 ${DATE_TAG}",
+            "body": ${BODY_JSON},
+            "assignees": ["${{ env.COPILOT_BOT }}"],
+            "labels": ["rebase", "copilot-task"],
+            "agent_assignment": {
+              "target_repo": "${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}",
+              "base_branch": "${CONFLICT_BRANCH}",
+              "custom_instructions": "Resolve all merge conflict markers on this branch. Prefer upstream changes but preserve Intel XPU-specific customizations. Open a PR targeting ${{ env.BRANCH_NAME }} when done.",
+              "model": "${COPILOT_MODEL}"
+            }
+          }
+          EOF
+
+          echo "::warning::Rebase failed for ${{ env.TARGET_REPO }}. Issue created and assigned to Copilot."
+
+  # ============================================================
+  # Job 2: Rebase torch-xpu-ops (main)
+  # ============================================================
+  rebase-torch-xpu-ops:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event.inputs.repo_target == 'all' ||
+      github.event.inputs.repo_target == 'torch-xpu-ops'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ORG: intel-innersource
+      TARGET_REPO: frameworks.ai.pytorch.torch-xpu-ops
+      BRANCH_NAME: main
+      UPSTREAM_REPO: https://github.com/intel/torch-xpu-ops.git
+      UPSTREAM_REF: upstream/main
+    steps:
+      - name: Checkout tooling repo
+        uses: actions/checkout@v4
+      - name: Setup Git
+        run: |
+          git config --global user.name "rebase-bot"
+          git config --global user.email "rebase-bot@noreply.github.com"
+      - name: Clone target repo
+        run: |
+          git clone https://${{ secrets.GH_TOKEN }}@github.com/${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}.git
+          cd ${{ env.TARGET_REPO }}
+          git remote add upstream ${{ env.UPSTREAM_REPO }}
+          git fetch upstream
+
+      - name: Attempt rebase
+        id: rebase
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          DATE_TAG=$(date +%Y%m%d)
+          REBASE_BRANCH="rebase_${DATE_TAG}"
+          git checkout -b "$REBASE_BRANCH"
+          echo "rebase_branch=$REBASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "date_tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+          if bash ../scripts/rebase_with_conflict_report.sh \
+            "${{ env.TARGET_REPO }}" "${{ env.BRANCH_NAME }}" "${{ env.UPSTREAM_REF }}" \
+            "$REBASE_BRANCH" "/tmp/conflict_report.md"; then
+            echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push rebase branch
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        run: cd ${{ env.TARGET_REPO }} && git push origin "${{ steps.rebase.outputs.rebase_branch }}"
+      - name: Create rebase PR
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          gh pr create \
+            --title "Weekly rebase onto upstream/main (${{ steps.rebase.outputs.rebase_branch }})" \
+            --body "Automated weekly rebase. All conflicts auto-resolved." \
+            --base "${{ env.BRANCH_NAME }}" --head "${{ steps.rebase.outputs.rebase_branch }}"
+
+      - name: Prepare conflict branch
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        id: conflict
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          git rebase --abort 2>/dev/null || true
+          CONFLICT_BRANCH="conflict/rebase_${{ steps.rebase.outputs.date_tag }}"
+          git checkout "${{ env.BRANCH_NAME }}"
+          git checkout -b "$CONFLICT_BRANCH"
+          git merge "${{ env.UPSTREAM_REF }}" --no-commit --no-ff || true
+          git add -A
+          git commit -m "WIP: upstream merge conflicts $(date +%Y%m%d)" --allow-empty
+          git push origin "$CONFLICT_BRANCH"
+          echo "conflict_branch=$CONFLICT_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Create Issue → assign Copilot
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          COPILOT_MODEL: ${{ github.event.inputs.copilot_model || '' }}
+        run: |
+          REPORT=$(cat /tmp/conflict_report.md 2>/dev/null || echo "冲突详情不可用")
+          CONFLICT_BRANCH="${{ steps.conflict.outputs.conflict_branch }}"
+          DATE_TAG="${{ steps.rebase.outputs.date_tag }}"
+
+          read -r -d '' BODY << 'EOF' || true
+          ## Weekly Rebase 冲突
+
+          **冲突分支:** `CONFLICT_BRANCH_PH`
+
+          REPORT_PH
+
+          ### 要求
+          1. 解决 `CONFLICT_BRANCH_PH` 上所有冲突标记
+          2. 优先保留 upstream 改动，保留 Intel 特有代码
+          3. 开 PR target `BRANCH_PH`，标题: `Weekly rebase DATE_PH - conflict resolution`
+          EOF
+          BODY="${BODY//CONFLICT_BRANCH_PH/$CONFLICT_BRANCH}"
+          BODY="${BODY//REPORT_PH/$REPORT}"
+          BODY="${BODY//BRANCH_PH/${{ env.BRANCH_NAME }}}"
+          BODY="${BODY//DATE_PH/$DATE_TAG}"
+
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}/issues" \
+            --input - <<APIJSON
+          {
+            "title": "[Auto Rebase] torch-xpu-ops 冲突解决 ${DATE_TAG}",
+            "body": $(echo "$BODY" | jq -Rs .),
+            "assignees": ["${{ env.COPILOT_BOT }}"],
+            "labels": ["rebase", "copilot-task"],
+            "agent_assignment": {
+              "target_repo": "${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}",
+              "base_branch": "${CONFLICT_BRANCH}",
+              "custom_instructions": "Resolve all merge conflicts. Prefer upstream, preserve Intel-specific code. PR target: ${{ env.BRANCH_NAME }}.",
+              "model": "${COPILOT_MODEL}"
+            }
+          }
+          APIJSON
+
+  # ============================================================
+  # Job 3: Rebase torch-xpu-ops dev/upstream
+  # ============================================================
+  rebase-torch-xpu-ops-dev:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event.inputs.repo_target == 'all' ||
+      github.event.inputs.repo_target == 'torch-xpu-ops-dev'
+    runs-on: ubuntu-latest
+    env:
+      TARGET_ORG: intel-innersource
+      TARGET_REPO: frameworks.ai.pytorch.torch-xpu-ops
+      BRANCH_NAME: dev/upstream
+      UPSTREAM_REPO: https://github.com/intel/torch-xpu-ops.git
+      UPSTREAM_REF: upstream/main
+    steps:
+      - name: Checkout tooling repo
+        uses: actions/checkout@v4
+      - name: Setup Git
+        run: |
+          git config --global user.name "rebase-bot"
+          git config --global user.email "rebase-bot@noreply.github.com"
+      - name: Clone target repo
+        run: |
+          git clone -b dev/upstream https://${{ secrets.GH_TOKEN }}@github.com/${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}.git
+          cd ${{ env.TARGET_REPO }}
+          git remote add upstream ${{ env.UPSTREAM_REPO }}
+          git fetch upstream
+
+      - name: Attempt rebase
+        id: rebase
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          DATE_TAG=$(date +%Y%m%d)
+          REBASE_BRANCH="dev_rebase_${DATE_TAG}"
+          git checkout -b "$REBASE_BRANCH"
+          echo "rebase_branch=$REBASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "date_tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+          if bash ../scripts/rebase_with_conflict_report.sh \
+            "${{ env.TARGET_REPO }}" "${{ env.BRANCH_NAME }}" "${{ env.UPSTREAM_REF }}" \
+            "$REBASE_BRANCH" "/tmp/conflict_report.md"; then
+            echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push rebase branch
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        run: cd ${{ env.TARGET_REPO }} && git push origin "${{ steps.rebase.outputs.rebase_branch }}"
+      - name: Create rebase PR
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          gh pr create \
+            --title "Weekly rebase onto upstream/main (${{ steps.rebase.outputs.rebase_branch }})" \
+            --body "Automated weekly rebase. All conflicts auto-resolved." \
+            --base "${{ env.BRANCH_NAME }}" --head "${{ steps.rebase.outputs.rebase_branch }}"
+
+      - name: Prepare conflict branch
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        id: conflict
+        run: |
+          cd ${{ env.TARGET_REPO }}
+          git rebase --abort 2>/dev/null || true
+          CONFLICT_BRANCH="conflict/dev_rebase_${{ steps.rebase.outputs.date_tag }}"
+          git checkout "${{ env.BRANCH_NAME }}"
+          git checkout -b "$CONFLICT_BRANCH"
+          git merge "${{ env.UPSTREAM_REF }}" --no-commit --no-ff || true
+          git add -A
+          git commit -m "WIP: upstream merge conflicts $(date +%Y%m%d)" --allow-empty
+          git push origin "$CONFLICT_BRANCH"
+          echo "conflict_branch=$CONFLICT_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Create Issue → assign Copilot
+        if: steps.rebase.outputs.rebase_ok == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          COPILOT_MODEL: ${{ github.event.inputs.copilot_model || '' }}
+        run: |
+          REPORT=$(cat /tmp/conflict_report.md 2>/dev/null || echo "冲突详情不可用")
+          CONFLICT_BRANCH="${{ steps.conflict.outputs.conflict_branch }}"
+          DATE_TAG="${{ steps.rebase.outputs.date_tag }}"
+
+          read -r -d '' BODY << 'EOF' || true
+          ## Weekly Rebase 冲突 (dev/upstream)
+
+          **冲突分支:** `CONFLICT_BRANCH_PH`
+
+          REPORT_PH
+
+          ### 要求
+          1. 解决 `CONFLICT_BRANCH_PH` 上所有冲突标记
+          2. 优先保留 upstream 改动，保留 Intel 特有代码
+          3. 开 PR target `BRANCH_PH`，标题: `Weekly rebase DATE_PH - dev/upstream conflict resolution`
+          EOF
+          BODY="${BODY//CONFLICT_BRANCH_PH/$CONFLICT_BRANCH}"
+          BODY="${BODY//REPORT_PH/$REPORT}"
+          BODY="${BODY//BRANCH_PH/${{ env.BRANCH_NAME }}}"
+          BODY="${BODY//DATE_PH/$DATE_TAG}"
+
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}/issues" \
+            --input - <<APIJSON
+          {
+            "title": "[Auto Rebase] dev/upstream 冲突解决 ${DATE_TAG}",
+            "body": $(echo "$BODY" | jq -Rs .),
+            "assignees": ["${{ env.COPILOT_BOT }}"],
+            "labels": ["rebase", "copilot-task"],
+            "agent_assignment": {
+              "target_repo": "${{ env.TARGET_ORG }}/${{ env.TARGET_REPO }}",
+              "base_branch": "${CONFLICT_BRANCH}",
+              "custom_instructions": "Resolve all merge conflicts. Prefer upstream, preserve Intel-specific code. PR target: ${{ env.BRANCH_NAME }}.",
+              "model": "${COPILOT_MODEL}"
+            }
+          }
+          APIJSON
