@@ -30,7 +30,9 @@ FAILED_PRS=()
 SUCCESS_PRS=()
 SKIPPED_PRS=()
 
-echo "$PR_JSON" | jq -c '.[]' | while read -r pr; do
+# Use process substitution to avoid subshell (pipe | while creates subshell,
+# losing array modifications). This keeps arrays visible after the loop.
+while read -r pr; do
   PR_NUM=$(echo "$pr" | jq -r '.number')
   HEAD_BRANCH=$(echo "$pr" | jq -r '.headRefName')
   AUTHOR=$(echo "$pr" | jq -r '.author.login')
@@ -107,7 +109,7 @@ echo "$PR_JSON" | jq -c '.[]' | while read -r pr; do
   # Clean up local branch
   git checkout "${BASE_BRANCH}" 2>/dev/null || git checkout --detach
   git branch -D "pr-${PR_NUM}" 2>/dev/null || true
-done
+done < <(echo "$PR_JSON" | jq -c '.[]')
 
 # Return to base branch
 git checkout "${BASE_BRANCH}" 2>/dev/null || true
