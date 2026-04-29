@@ -6,3 +6,4 @@
 
 ## v0.3.0 (2026-04-30)
 - Bug fixes
+- Performance improvements
