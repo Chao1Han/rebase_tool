@@ -1,0 +1,88 @@
+name: Post Rebase
+
+# rebase PR merge 后：创建 tag + rebase 开放 PR 分支
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+      - master_next
+      - dev/upstream
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  post-rebase:
+    if: >-
+      github.event.pull_request.merged == true &&
+      (startsWith(github.event.pull_request.head.ref, 'rebase_') ||
+      startsWith(github.event.pull_request.head.ref, 'dev_rebase_'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "rebase-bot"
+          git config user.email "rebase-bot@noreply.github.com"
+
+      # ============================================================
+      # Step 1: Create tag for fallback
+      # ============================================================
+      - name: Create rebase tag
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+          DATE_TAG=$(date +%Y%m%d)
+          case "$BASE_BRANCH" in
+            main)           TAG_NAME="rebase-${DATE_TAG}" ;;
+            master_next)    TAG_NAME="rebase-torch-${DATE_TAG}" ;;
+            dev/upstream)   TAG_NAME="rebase-dev-${DATE_TAG}" ;;
+            *)              TAG_NAME="rebase-${BASE_BRANCH//\//-}-${DATE_TAG}" ;;
+          esac
+
+          # 如果同名 tag 已存在则加序号
+          FINAL_TAG="$TAG_NAME"
+          SEQ=1
+          while git rev-parse "$FINAL_TAG" >/dev/null 2>&1; do
+            FINAL_TAG="${TAG_NAME}-${SEQ}"
+            SEQ=$((SEQ + 1))
+          done
+
+          git tag "$FINAL_TAG" -m "Weekly rebase checkpoint ${DATE_TAG} on ${BASE_BRANCH}"
+          git push origin "$FINAL_TAG"
+          echo "Created tag: $FINAL_TAG"
+          echo "tag_name=$FINAL_TAG" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # Step 2: Rebase open PR branches
+      # ============================================================
+      - name: Copy rebase-pr script to temp
+        run: cp scripts/rebase/rebase_open_prs.sh "${RUNNER_TEMP}/rebase_open_prs.sh"
+
+      - name: Rebase open PR branches
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          bash "${RUNNER_TEMP}/rebase_open_prs.sh" \
+            "${{ github.event.pull_request.base.ref }}" \
+            "${{ github.repository }}"
+
+      # ============================================================
+      # Step 3: Cleanup rebase branch
+      # ============================================================
+      - name: Delete merged rebase branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          REBASE_BRANCH="${{ github.event.pull_request.head.ref }}"
+          git push origin --delete "$REBASE_BRANCH" 2>/dev/null || echo "Branch already deleted"

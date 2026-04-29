@@ -14,7 +14,7 @@ echo "Attempting rebase: $REPO_NAME branch $BRANCH_NAME onto $REBASE_TARGET"
 # Load auto-resolve list from JSON (same logic as original)
 AUTO_RESOLVE_FILES=()
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
-JSON_PATH="${SCRIPT_DIR}/../conflict_auto_resolve_files.json"
+JSON_PATH="${SCRIPT_DIR}/conflict_auto_resolve_files.json"
 if [[ -f "$JSON_PATH" ]]; then
     if command -v jq >/dev/null 2>&1; then
         mapfile -t AUTO_RESOLVE_FILES < <(jq -r --arg repo "$REPO_NAME" --arg branch "$BRANCH_NAME" '.[$repo][$branch][]?' "$JSON_PATH")
@@ -33,17 +33,18 @@ is_in_auto_resolve_list() {
 }
 
 # Initialize report
-> "$REPORT_FILE"
+: > "$REPORT_FILE"
 
 # Attempt rebase
 if ! git rebase "$REBASE_TARGET"; then
     while true; do
         echo "Rebase hit conflicts, checking auto-resolvable files..."
 
-        CONFLICTED_FILES=$(git status --porcelain | awk '/^[AU][DU] |^UU |^AA / {print $2}')
+        CONFLICTED_FILES=()
+        mapfile -d '' -t CONFLICTED_FILES < <(git diff --name-only --diff-filter=U -z)
         UNHANDLED_FILES=()
 
-        for file in $CONFLICTED_FILES; do
+        for file in "${CONFLICTED_FILES[@]}"; do
             if is_in_auto_resolve_list "$file"; then
                 echo "Auto-resolving: $file (--theirs)"
                 git checkout --theirs "$file"
@@ -99,7 +100,7 @@ if ! git rebase "$REBASE_TARGET"; then
                 echo "### How to reproduce locally"
                 echo ""
                 echo '```bash'
-                echo "cd $REPO_NAME"
+                echo "# Run these commands from the repository root"
                 echo "git fetch upstream"
                 echo "git checkout $BRANCH_NAME"
                 echo "git checkout -b $REBASE_BRANCH"
@@ -107,6 +108,29 @@ if ! git rebase "$REBASE_TARGET"; then
                 echo "# Then resolve conflicts in: ${UNHANDLED_FILES[*]}"
                 echo '```'
             } >> "$REPORT_FILE"
+
+            # Abort rebase, then do a trial merge to find ALL conflicting files
+            git rebase --abort 2>/dev/null || true
+            git checkout "$BRANCH_NAME" 2>/dev/null || true
+
+            if ! git merge --no-commit --no-ff "$REBASE_TARGET" 2>/dev/null; then
+                ALL_CONFLICT_FILES=()
+                mapfile -d '' -t ALL_CONFLICT_FILES < <(git diff --name-only --diff-filter=U -z)
+
+                if [[ ${#ALL_CONFLICT_FILES[@]} -gt 0 ]]; then
+                    {
+                        echo "### All Conflicting Files (full merge view)"
+                        echo ""
+                        echo "The following files have conflicts across all upstream commits:"
+                        echo ""
+                        for f in "${ALL_CONFLICT_FILES[@]}"; do
+                            echo "- \`$f\`"
+                        done
+                        echo ""
+                    } >> "$REPORT_FILE"
+                fi
+                git merge --abort 2>/dev/null || true
+            fi
 
             echo "Conflict report written to $REPORT_FILE"
             echo "Unhandled conflicts in: ${UNHANDLED_FILES[*]}"

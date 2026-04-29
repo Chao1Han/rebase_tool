@@ -36,11 +36,11 @@ jobs:
           gh pr comment "$PR_NUMBER" \
             --repo ${{ github.repository }} \
             --body "## CI Passed - Rebase Ready
-
-          Copilot 已解决冲突，CI 通过。
-
-          **下一步：**
-          1. Review PR 改动
-          2. Merge 后将分支内容同步到主分支
-
+          
+          Copilot has resolved conflicts and CI passed.
+          
+          **Next steps:**
+          1. Review PR changes
+          2. Merge and sync to target branch
+          
           @${{ github.repository_owner }}"
