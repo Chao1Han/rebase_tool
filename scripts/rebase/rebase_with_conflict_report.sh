@@ -117,16 +117,28 @@ if ! git rebase "$REBASE_TARGET"; then
                 ALL_CONFLICT_FILES=()
                 mapfile -d '' -t ALL_CONFLICT_FILES < <(git diff --name-only --diff-filter=U -z)
 
-                if [[ ${#ALL_CONFLICT_FILES[@]} -gt 0 ]]; then
+                # Filter out auto-resolvable files from the report
+                REPORT_CONFLICT_FILES=()
+                for f in "${ALL_CONFLICT_FILES[@]}"; do
+                    if ! is_in_auto_resolve_list "$f"; then
+                        REPORT_CONFLICT_FILES+=("$f")
+                    fi
+                done
+
+                if [[ ${#REPORT_CONFLICT_FILES[@]} -gt 0 ]]; then
                     {
                         echo "### All Conflicting Files (full merge view)"
                         echo ""
                         echo "The following files have conflicts across all upstream commits:"
                         echo ""
-                        for f in "${ALL_CONFLICT_FILES[@]}"; do
+                        for f in "${REPORT_CONFLICT_FILES[@]}"; do
                             echo "- \`$f\`"
                         done
                         echo ""
+                        if [[ ${#ALL_CONFLICT_FILES[@]} -ne ${#REPORT_CONFLICT_FILES[@]} ]]; then
+                            echo "_Note: ${#ALL_CONFLICT_FILES[@]} total conflicts, $(( ${#ALL_CONFLICT_FILES[@]} - ${#REPORT_CONFLICT_FILES[@]} )) auto-resolvable (not listed)._"
+                            echo ""
+                        fi
                     } >> "$REPORT_FILE"
                 fi
                 git merge --abort 2>/dev/null || true
