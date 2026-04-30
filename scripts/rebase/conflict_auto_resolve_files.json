@@ -1,6 +1,8 @@
 {
     "Chao1Han/rebase_tool": {
-      "main": [],
+      "main": [
+        "config.toml"
+      ],
       "dev/upstream": []
     }
 }
