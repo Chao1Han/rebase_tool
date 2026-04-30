@@ -1,7 +1,8 @@
 {
     "Chao1Han/rebase_tool": {
       "main": [
-        "config.toml"
+        "config.toml",
+        "src/hello.py"
       ],
       "dev/upstream": []
     }
