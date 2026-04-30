@@ -1,0 +1,88 @@
+name: Auto PR After Conflict Resolution
+
+# Copilot 的冲突解决 PR 合并到 conflict/* 分支后，自动创建 PR → 目标分支
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - 'conflict/rebase_*'
+      - 'conflict/dev_rebase_*'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-rebase-pr:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine target branch
+        id: target
+        run: |
+          CONFLICT_BRANCH="${{ github.event.pull_request.base.ref }}"
+          echo "conflict_branch=$CONFLICT_BRANCH" >> "$GITHUB_OUTPUT"
+
+          # conflict/rebase_* → main
+          # conflict/dev_rebase_* → dev/upstream
+          if [[ "$CONFLICT_BRANCH" == conflict/dev_rebase_* ]]; then
+            echo "target_branch=dev/upstream" >> "$GITHUB_OUTPUT"
+            # Extract date tag from branch name: conflict/dev_rebase_YYYYMMDD_runid_attempt
+            DATE_TAG=$(echo "$CONFLICT_BRANCH" | sed 's|conflict/dev_rebase_\([0-9]*\)_.*|\1|')
+            REBASE_BRANCH="dev_rebase_${DATE_TAG}_${{ github.run_id }}"
+            echo "rebase_branch=$REBASE_BRANCH" >> "$GITHUB_OUTPUT"
+          elif [[ "$CONFLICT_BRANCH" == conflict/rebase_* ]]; then
+            echo "target_branch=main" >> "$GITHUB_OUTPUT"
+            DATE_TAG=$(echo "$CONFLICT_BRANCH" | sed 's|conflict/rebase_\([0-9]*\)_.*|\1|')
+            REBASE_BRANCH="rebase_${DATE_TAG}_${{ github.run_id }}"
+            echo "rebase_branch=$REBASE_BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unknown conflict branch pattern: $CONFLICT_BRANCH"
+            exit 1
+          fi
+          echo "date_tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout conflict branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.conflict_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "rebase-bot"
+          git config user.email "rebase-bot@noreply.github.com"
+
+      - name: Create rebase branch from conflict
+        run: |
+          git checkout -b "${{ steps.target.outputs.rebase_branch }}"
+          git push origin "${{ steps.target.outputs.rebase_branch }}"
+
+      - name: Create PR to target branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          TARGET="${{ steps.target.outputs.target_branch }}"
+          REBASE_BRANCH="${{ steps.target.outputs.rebase_branch }}"
+          DATE_TAG="${{ steps.target.outputs.date_tag }}"
+
+          PR_TITLE="Weekly rebase onto upstream/main (${REBASE_BRANCH})"
+          PR_BODY="## Auto-generated after conflict resolution
+
+          Copilot resolved conflicts in PR #${{ github.event.pull_request.number }}.
+          This PR applies the resolved result to \`${TARGET}\`.
+
+          - Source: \`${{ steps.target.outputs.conflict_branch }}\` (conflict resolved)
+          - Target: \`${TARGET}\`
+          - Date: ${DATE_TAG}
+
+          Once merged, \`post-rebase.yml\` will automatically:
+          1. Create a rebase tag
+          2. Rebase open PR branches"
+
+          gh pr create \
+            --base "$TARGET" \
+            --head "$REBASE_BRANCH" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY"
