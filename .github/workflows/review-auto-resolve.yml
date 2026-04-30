@@ -1,0 +1,111 @@
+name: Review Auto-Resolve Files
+
+# Rebase PR 创建后，检查 auto-resolve 文件是否有 upstream 静默改动
+# 如果有，创建 Copilot review issue
+on:
+  pull_request:
+    types: [opened]
+    branches:
+      - main
+      - dev/upstream
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check-auto-resolve-diff:
+    if: >-
+      startsWith(github.event.pull_request.head.ref, 'rebase_') ||
+      startsWith(github.event.pull_request.head.ref, 'dev_rebase_')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout rebase branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Get pre-rebase base
+        id: base
+        run: |
+          # The base of the PR is the target branch; find the merge-base
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+          OLD_BASE=$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref }}")
+          echo "old_base=$OLD_BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Check auto-resolve file diffs
+        id: diff
+        run: |
+          REPORT_FILE="${RUNNER_TEMP}/auto_resolve_diff.md"
+          chmod +x scripts/rebase/check_auto_resolve_diff.sh
+          OUTPUT=$(bash scripts/rebase/check_auto_resolve_diff.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.base.ref }}" \
+            "${{ steps.base.outputs.old_base }}" \
+            "$REPORT_FILE" 2>&1) || true
+
+          echo "$OUTPUT"
+
+          if [[ -f "$REPORT_FILE" ]]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "report_file=$REPORT_FILE" >> "$GITHUB_OUTPUT"
+            # Extract changed count
+            CHANGED=$(echo "$OUTPUT" | grep "changed_count=" | cut -d= -f2)
+            echo "changed_count=${CHANGED:-0}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR with diff summary
+        if: steps.diff.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          REPORT=$(cat "${{ steps.diff.outputs.report_file }}")
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "$REPORT"
+
+      - name: Create Copilot review issue
+        if: steps.diff.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          REPORT=$(cat "${{ steps.diff.outputs.report_file }}")
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          PR_NUM="${{ github.event.pull_request.number }}"
+          DATE_TAG=$(date +%Y%m%d)
+
+          ISSUE_TITLE="[Review] Auto-resolve files changed in rebase PR #${PR_NUM} (${BASE_REF})"
+          ISSUE_BODY="$(cat <<EOF
+          ${REPORT}
+
+          ---
+
+          ## Context
+          - Rebase PR: #${PR_NUM}
+          - Branch: \`${{ github.event.pull_request.head.ref }}\` → \`${BASE_REF}\`
+          - These files are in \`conflict_auto_resolve_files.json\` — on conflict, private version is always kept.
+          - However, **non-conflicting** upstream changes were applied silently during rebase.
+
+          ## Task for Copilot
+          1. Review each diff above
+          2. Check if upstream changes break Intel XPU-specific functionality
+          3. If safe: comment "LGTM - upstream changes are compatible"
+          4. If problematic: explain which changes are risky and suggest a fix
+
+          /cc @${{ env.COPILOT_BOT }}
+          EOF
+          )"
+
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${{ github.repository }}/issues" \
+            -f title="$ISSUE_TITLE" \
+            -f body="$ISSUE_BODY" \
+            -f "assignees[]=${{ env.COPILOT_BOT }}"
+    env:
+      COPILOT_BOT: copilot-swe-agent[bot]
