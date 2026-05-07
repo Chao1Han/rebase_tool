@@ -15,6 +15,7 @@ def load_config():
 def test_line_length():
     """Ensure the configured line length stays within the expected range."""
     line_length = load_config()["tool"]["ruff"]["line-length"]
+    assert isinstance(line_length, int), "line-length must be an integer"
     assert 80 <= line_length <= 120, "line-length must be reasonable"
 
 
@@ -26,8 +27,9 @@ def test_target_version():
 
 
 def test_optional_ruff_format_settings_are_compatible():
-    """Any optional Ruff format settings should remain compatible."""
+    """Either keep the private config or use the reviewed compatible format block."""
     format_config = load_config()["tool"]["ruff"].get("format")
+    assert format_config is None or isinstance(format_config, dict)
     if format_config is None:
         return
 
