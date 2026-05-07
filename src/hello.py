@@ -1,10 +1,11 @@
 # Upstream refactored code with Intel XPU support
 def hello(device="cpu"):
-    """Generic hello for any device."""
-    print(f"Hello from {device}!")
+    """Generic hello for any device - v2.0."""
+    print(f"[v2.0] Hello from {device}!")
 
 def hello_cuda():
-    print("Hello from CUDA!")
+    """CUDA accelerated hello - refactored."""
+    print("[CUDA] Hello from CUDA accelerator!")
 
 def hello_xpu():
     """Intel XPU accelerated hello."""
