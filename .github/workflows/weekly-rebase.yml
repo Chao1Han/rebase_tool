@@ -61,10 +61,17 @@ jobs:
           echo "date_tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
           REPORT_FILE="${RUNNER_TEMP}/conflict_report_${{ github.job }}_${{ github.run_id }}.md"
           echo "report_file=$REPORT_FILE" >> "$GITHUB_OUTPUT"
-          if bash "${RUNNER_TEMP}/rebase-scripts/rebase_with_conflict_report.sh" \
+          set +e
+          bash "${RUNNER_TEMP}/rebase-scripts/rebase_with_conflict_report.sh" \
             "${{ github.repository }}" "${{ env.BRANCH_NAME }}" "${{ env.UPSTREAM_REF }}" \
-            "$REBASE_BRANCH" "$REPORT_FILE"; then
+            "$REBASE_BRANCH" "$REPORT_FILE"
+          REBASE_EXIT=$?
+          set -e
+          if [[ $REBASE_EXIT -eq 0 ]]; then
             echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+          elif [[ $REBASE_EXIT -eq 2 ]]; then
+            # Rebase completed linearly but has conflict markers
+            echo "rebase_ok=conflict" >> "$GITHUB_OUTPUT"
           else
             echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
           fi
@@ -118,21 +125,17 @@ jobs:
             -f base="${{ env.BRANCH_NAME }}"
 
       - name: Prepare conflict branch
-        if: steps.rebase.outputs.rebase_ok == 'false'
+        if: steps.rebase.outputs.rebase_ok == 'conflict'
         id: conflict
         run: |
-          git rebase --abort 2>/dev/null || true
+          # Rebase already completed linearly (exit 2) — just rename and push
           CONFLICT_BRANCH="conflict/rebase_${{ steps.rebase.outputs.date_tag }}_${{ github.run_id }}_${{ github.run_attempt }}"
-          git checkout "${{ env.BRANCH_NAME }}"
-          git checkout -b "$CONFLICT_BRANCH"
-          git merge "${{ env.UPSTREAM_REF }}" --no-commit --no-ff || true
-          git add -A
-          git commit -m "WIP: upstream merge conflicts $(date +%Y%m%d)" --allow-empty
+          git branch -m "$CONFLICT_BRANCH"
           git push origin "$CONFLICT_BRANCH"
           echo "conflict_branch=$CONFLICT_BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Create Issue and assign Copilot
-        if: steps.rebase.outputs.rebase_ok == 'false'
+        if: steps.rebase.outputs.rebase_ok == 'conflict'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
