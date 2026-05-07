@@ -8,8 +8,12 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.toml"
 
 
 def load_config():
-    """Load the checked-in Ruff configuration."""
-    return tomllib.loads(CONFIG_PATH.read_text())
+    """Load the checked-in Ruff configuration from the repository root."""
+    assert CONFIG_PATH.is_file(), f"Missing config file: {CONFIG_PATH}"
+    try:
+        return tomllib.loads(CONFIG_PATH.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        raise AssertionError(f"config.toml must be valid TOML: {exc}") from exc
 
 
 def test_line_length():
@@ -27,7 +31,7 @@ def test_target_version():
 
 
 def test_optional_ruff_format_settings_are_compatible():
-    """Either keep the private config or use the reviewed compatible format block."""
+    """The private config may omit Ruff format settings; if present, they must match the reviewed values."""
     format_config = load_config()["tool"]["ruff"].get("format")
     assert format_config is None or isinstance(format_config, dict)
     if format_config is None:
