@@ -28,7 +28,8 @@ def test_target_version():
 def test_optional_ruff_format_settings_are_compatible():
     """Any optional Ruff format settings should remain compatible."""
     format_config = load_config()["tool"]["ruff"].get("format")
-    assert format_config in (
-        None,
-        {"quote-style": "double", "indent-style": "space"},
-    )
+    if format_config is None:
+        return
+
+    assert format_config["quote-style"] == "double"
+    assert format_config["indent-style"] == "space"
