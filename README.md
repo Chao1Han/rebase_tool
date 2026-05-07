@@ -5,6 +5,7 @@ This repo is used to test the weekly rebase automation workflow.
 ## Configuration
 - line-length = 120
 - target-version = py310
+<<<<<<< HEAD
 - upstream-added = true
 
 ## Upstream v2.0 Release Notes
@@ -18,3 +19,9 @@ This repo is used to test the weekly rebase automation workflow.
 ## Contributing
 - See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines
 - PRs welcome!
+=======
+
+## Intel Private Notes
+- XPU SYCL backend optimized
+- Private CUDA path added
+>>>>>>> 1718d70 (Add Intel private development notes)
