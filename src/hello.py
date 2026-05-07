@@ -4,7 +4,8 @@ def hello(device="cpu"):
     print(f"Hello from {device}!")
 
 def hello_cuda():
-    print("Hello from CUDA!")
+    """CUDA hello - Intel private optimization."""
+    print("Hello from CUDA with Intel optimizations!")
 
 def hello_xpu():
     """Intel XPU accelerated hello."""
