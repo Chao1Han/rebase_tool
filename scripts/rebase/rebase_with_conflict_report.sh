@@ -1,6 +1,11 @@
 #!/bin/bash
 # Enhanced rebase script that generates a conflict report for Copilot
 # Usage: rebase_with_conflict_report.sh <repo_name> <branch_name> <rebase_target> <rebase_branch> <report_file>
+#
+# Exit codes:
+#   0 = rebase completed successfully (no conflicts)
+#   1 = rebase failed (unexpected error)
+#   2 = rebase completed with conflict markers (linear history preserved)
 set -e
 
 REPO_NAME=$1
@@ -34,6 +39,7 @@ is_in_auto_resolve_list() {
 
 # Initialize report
 : > "$REPORT_FILE"
+HAS_UNRESOLVED_CONFLICTS=false
 
 # Attempt rebase
 if ! git rebase "$REBASE_TARGET"; then
@@ -55,13 +61,14 @@ if ! git rebase "$REBASE_TARGET"; then
         done
 
         if [[ ${#UNHANDLED_FILES[@]} -gt 0 ]]; then
-            echo "=== Unresolvable conflicts found ==="
+            HAS_UNRESOLVED_CONFLICTS=true
+            echo "=== Unresolvable conflicts found, force-continuing to preserve linear history ==="
 
             # Get current rebase commit info
             CURRENT_COMMIT=$(cat .git/rebase-merge/stopped-sha 2>/dev/null || echo "unknown")
             COMMIT_MSG=$(git log --format='%s' -1 "$CURRENT_COMMIT" 2>/dev/null || echo "unknown")
 
-            # Write report header
+            # Write report
             {
                 echo "### Conflicting Commit"
                 echo ""
@@ -70,92 +77,54 @@ if ! git rebase "$REBASE_TARGET"; then
                 echo ""
                 echo "### Conflicted Files"
                 echo ""
-            } >> "$REPORT_FILE"
-
-            # For each unhandled conflict, capture the diff
-            for file in "${UNHANDLED_FILES[@]}"; do
-                {
+                for file in "${UNHANDLED_FILES[@]}"; do
                     echo "#### \`$file\`"
                     echo ""
                     echo '<details><summary>Conflict diff</summary>'
                     echo ""
                     echo '```diff'
-                    # Show the conflict content (limited to 200 lines per file)
                     head -200 "$file" 2>/dev/null || echo "(file not readable)"
                     echo '```'
                     echo ""
                     echo '</details>'
                     echo ""
-                } >> "$REPORT_FILE"
-            done
-
-            # Also capture overall status
-            {
-                echo "### Git Status"
+                done
+                echo "---"
                 echo ""
-                echo '```'
-                git status --short
-                echo '```'
-                echo ""
-                echo "### How to reproduce locally"
-                echo ""
-                echo '```bash'
-                echo "# Run these commands from the repository root"
-                echo "git fetch upstream"
-                echo "git checkout $BRANCH_NAME"
-                echo "git checkout -b $REBASE_BRANCH"
-                echo "git rebase $REBASE_TARGET"
-                echo "# Then resolve conflicts in: ${UNHANDLED_FILES[*]}"
-                echo '```'
             } >> "$REPORT_FILE"
 
-            # Abort rebase, then do a trial merge to find ALL conflicting files
-            git rebase --abort 2>/dev/null || true
-            git checkout "$BRANCH_NAME" 2>/dev/null || true
-
-            if ! git merge --no-commit --no-ff "$REBASE_TARGET" 2>/dev/null; then
-                ALL_CONFLICT_FILES=()
-                mapfile -d '' -t ALL_CONFLICT_FILES < <(git diff --name-only --diff-filter=U -z)
-
-                # Filter out auto-resolvable files from the report
-                REPORT_CONFLICT_FILES=()
-                for f in "${ALL_CONFLICT_FILES[@]}"; do
-                    if ! is_in_auto_resolve_list "$f"; then
-                        REPORT_CONFLICT_FILES+=("$f")
-                    fi
-                done
-
-                if [[ ${#REPORT_CONFLICT_FILES[@]} -gt 0 ]]; then
-                    {
-                        echo "### All Conflicting Files (full merge view)"
-                        echo ""
-                        echo "The following files have conflicts across all upstream commits:"
-                        echo ""
-                        for f in "${REPORT_CONFLICT_FILES[@]}"; do
-                            echo "- \`$f\`"
-                        done
-                        echo ""
-                        if [[ ${#ALL_CONFLICT_FILES[@]} -ne ${#REPORT_CONFLICT_FILES[@]} ]]; then
-                            echo "_Note: ${#ALL_CONFLICT_FILES[@]} total conflicts, $(( ${#ALL_CONFLICT_FILES[@]} - ${#REPORT_CONFLICT_FILES[@]} )) auto-resolvable (not listed)._"
-                            echo ""
-                        fi
-                    } >> "$REPORT_FILE"
-                fi
-                git merge --abort 2>/dev/null || true
-            fi
-
-            echo "Conflict report written to $REPORT_FILE"
-            echo "Unhandled conflicts in: ${UNHANDLED_FILES[*]}"
-            exit 1
+            # Force-add conflicted files (with markers) and continue rebase
+            # This preserves linear history — Copilot will resolve markers later
+            for file in "${UNHANDLED_FILES[@]}"; do
+                git add "$file"
+            done
         fi
 
-        # All conflicts in this step were auto-resolved, continue
-        if GIT_EDITOR=true git rebase --continue; then
+        # Continue rebase (either all auto-resolved, or force-continued with markers)
+        if GIT_EDITOR=true git rebase --continue 2>/dev/null; then
             break
         else
-            echo "Continuing rebase after auto-resolve..."
+            echo "Continuing rebase (next commit)..."
         fi
     done
+fi
+
+if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
+    # Append summary to report
+    {
+        echo "### How to reproduce locally"
+        echo ""
+        echo '```bash'
+        echo "git fetch upstream"
+        echo "git checkout $BRANCH_NAME"
+        echo "git checkout -b $REBASE_BRANCH"
+        echo "git rebase $REBASE_TARGET"
+        echo '```'
+    } >> "$REPORT_FILE"
+
+    echo "Rebase completed (linear) but with conflict markers."
+    echo "Conflict report written to $REPORT_FILE"
+    exit 2
 fi
 
 echo "Rebase completed successfully."
