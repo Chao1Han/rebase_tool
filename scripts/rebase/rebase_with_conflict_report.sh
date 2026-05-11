@@ -47,6 +47,18 @@ FILE_CONFLICT_LOG=$(mktemp)
 # GitHub commit link base (available in Actions, fallback for local)
 COMMIT_URL_BASE="${GITHUB_SERVER_URL:-https://github.com}/${REPO_NAME}/commit"
 
+# Record upstream commits included in this rebase (old_base..REBASE_TARGET)
+OLD_BASE=$(git merge-base HEAD "$REBASE_TARGET" 2>/dev/null || echo "")
+UPSTREAM_LOG=$(mktemp)
+if [[ -n "$OLD_BASE" ]]; then
+    git log --oneline "${OLD_BASE}..${REBASE_TARGET}" > "$UPSTREAM_LOG" 2>/dev/null || : > "$UPSTREAM_LOG"
+    UPSTREAM_COUNT=$(wc -l < "$UPSTREAM_LOG")
+    echo "Upstream commits since last rebase: $UPSTREAM_COUNT"
+else
+    : > "$UPSTREAM_LOG"
+    UPSTREAM_COUNT=0
+fi
+
 # Attempt rebase
 if ! git rebase "$REBASE_TARGET"; then
     while true; do
@@ -111,10 +123,27 @@ if ! git rebase "$REBASE_TARGET"; then
 fi
 
 if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
-    # Prepend all-files summary to the top of report
-    ALL_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq)
+    # Prepend summary sections to the top of report
     SUMMARY=$(mktemp)
     {
+        # Upstream commits section
+        if [[ -s "$UPSTREAM_LOG" ]]; then
+            echo "## Upstream Commits in This Rebase ($UPSTREAM_COUNT)"
+            echo ""
+            echo "<details><summary>Click to expand commit list</summary>"
+            echo ""
+            while IFS=' ' read -r sha msg; do
+                echo "- [\`$sha\`](${COMMIT_URL_BASE}/${sha}) $msg"
+            done < "$UPSTREAM_LOG"
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "---"
+            echo ""
+        fi
+
+        # All conflicting files
+        ALL_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq)
         echo "## All Conflicting Files (full merge view)"
         echo ""
         echo "The following files have conflicts across all upstream commits:"
@@ -137,6 +166,7 @@ if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
     } > "$SUMMARY"
     cat "$REPORT_FILE" >> "$SUMMARY"
     mv "$SUMMARY" "$REPORT_FILE"
+    rm -f "$UPSTREAM_LOG"
 
     # Append reproduce steps
     {
