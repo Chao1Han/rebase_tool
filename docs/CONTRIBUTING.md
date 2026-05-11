@@ -1,4 +1,4 @@
-# Contributing (upstream)
+# Contributing Guide
 
 ## Code Style
 - Use black formatter
