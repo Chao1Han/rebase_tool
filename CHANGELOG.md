@@ -7,3 +7,7 @@
 ## v0.3.0 (2026-04-30)
 - Bug fixes
 - Performance improvements
+
+## Intel Internal v0.3.1
+- Added XPU profiling support
+- Intel-specific CI pipeline
