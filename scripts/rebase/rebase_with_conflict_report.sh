@@ -78,8 +78,33 @@ if ! git rebase "$REBASE_TARGET"; then
                 echo "$file" >> "$FILE_CONFLICT_LOG"
             done
 
-            # Log step info (commit + files) for summary (tab-delimited)
-            printf '%s\t%s\t%s\t%s\n' "$CONFLICT_STEP" "$CURRENT_COMMIT" "$COMMIT_MSG" "${UNHANDLED_FILES[*]}" >> "${REPORT_FILE}.steps"
+            # Write per-step detail section
+            {
+                echo "### Step $CONFLICT_STEP — Commit \`${CURRENT_COMMIT:0:10}\`"
+                echo ""
+                echo "- **Message:** $COMMIT_MSG"
+                echo ""
+                for file in "${UNHANDLED_FILES[@]}"; do
+                    # Check if this file has appeared in earlier steps
+                    PREV_COUNT=$(head -n -${#UNHANDLED_FILES[@]} "$FILE_CONFLICT_LOG" 2>/dev/null | grep -cxF "$file" || true)
+                    REPEAT_TAG=""
+                    if [[ "$PREV_COUNT" -gt 0 ]]; then
+                        REPEAT_TAG=" ⚠️ **REPEATED** (conflict #$((PREV_COUNT + 1)) for this file)"
+                    fi
+                    echo "#### \`$file\`${REPEAT_TAG}"
+                    echo ""
+                    echo '<details><summary>Conflict markers</summary>'
+                    echo ""
+                    echo '```diff'
+                    grep -n -A5 -B2 "^<<<<<<< \|^=======$\|^>>>>>>> " "$file" 2>/dev/null | head -200 || head -200 "$file" 2>/dev/null || echo "(file not readable)"
+                    echo '```'
+                    echo ""
+                    echo '</details>'
+                    echo ""
+                done
+                echo "---"
+                echo ""
+            } >> "$REPORT_FILE"
 
             # Force-add conflicted files (with markers) and continue rebase
             # This preserves linear history — Copilot will resolve markers later
@@ -98,21 +123,11 @@ if ! git rebase "$REBASE_TARGET"; then
 fi
 
 if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
-    # Generate report: conflict summary table + multi-conflict warnings
-    {
-        echo "## Conflict Steps ($CONFLICT_STEP total)"
-        echo ""
-        echo "| Step | Commit | Message | Conflicted Files |"
-        echo "|------|--------|---------|------------------|"
-        if [[ -f "${REPORT_FILE}.steps" ]]; then
-            while IFS=$'\t' read -r step sha msg files; do
-                echo "| $step | \`${sha:0:10}\` | $msg | $files |"
-            done < "${REPORT_FILE}.steps"
-        fi
-        echo ""
-
-        MULTI_CONFLICT_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq -c | sort -rn | awk '$1 > 1 {print $1, $2}')
-        if [[ -n "$MULTI_CONFLICT_FILES" ]]; then
+    # Prepend multi-conflict summary to the top of report (before per-step details)
+    MULTI_CONFLICT_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq -c | sort -rn | awk '$1 > 1 {print $1, $2}')
+    if [[ -n "$MULTI_CONFLICT_FILES" ]]; then
+        SUMMARY=$(mktemp)
+        {
             echo "## ⚠️ Multi-Conflict Files"
             echo ""
             echo "These files had conflicts in **multiple steps**. Resolve them strictly in step order."
@@ -123,9 +138,24 @@ if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
                 echo "| \`$file\` | $count |"
             done <<< "$MULTI_CONFLICT_FILES"
             echo ""
-        fi
+            echo "---"
+            echo ""
+        } > "$SUMMARY"
+        cat "$REPORT_FILE" >> "$SUMMARY"
+        mv "$SUMMARY" "$REPORT_FILE"
+    fi
+
+    # Append reproduce steps
+    {
+        echo "### How to reproduce locally"
+        echo ""
+        echo '```bash'
+        echo "git fetch upstream"
+        echo "git checkout $BRANCH_NAME"
+        echo "git checkout -b $REBASE_BRANCH"
+        echo "git rebase $REBASE_TARGET"
+        echo '```'
     } >> "$REPORT_FILE"
-    rm -f "${REPORT_FILE}.steps"
 
     rm -f "$FILE_CONFLICT_LOG"
     echo "Rebase completed (linear) but with conflict markers ($CONFLICT_STEP steps)."
