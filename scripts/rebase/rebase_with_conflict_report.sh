@@ -78,8 +78,8 @@ if ! git rebase "$REBASE_TARGET"; then
                 echo "$file" >> "$FILE_CONFLICT_LOG"
             done
 
-            # Log step info (commit + files) for summary
-            echo "STEP:$CONFLICT_STEP:$CURRENT_COMMIT:$COMMIT_MSG:${UNHANDLED_FILES[*]}" >> "${REPORT_FILE}.steps"
+            # Log step info (commit + files) for summary (tab-delimited)
+            printf '%s\t%s\t%s\t%s\n' "$CONFLICT_STEP" "$CURRENT_COMMIT" "$COMMIT_MSG" "${UNHANDLED_FILES[*]}" >> "${REPORT_FILE}.steps"
 
             # Force-add conflicted files (with markers) and continue rebase
             # This preserves linear history — Copilot will resolve markers later
@@ -105,7 +105,7 @@ if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
         echo "| Step | Commit | Message | Conflicted Files |"
         echo "|------|--------|---------|------------------|"
         if [[ -f "${REPORT_FILE}.steps" ]]; then
-            while IFS=: read -r _ step sha msg files; do
+            while IFS=$'\t' read -r step sha msg files; do
                 echo "| $step | \`${sha:0:10}\` | $msg | $files |"
             done < "${REPORT_FILE}.steps"
         fi
