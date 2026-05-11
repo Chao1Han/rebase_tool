@@ -1,4 +1,4 @@
-# Rebase Tool Test Repo (upstream v3.0, Intel Edition)
+# Intel Rebase Tool Test Repo (based on upstream v3.0)
 
 This repo is used to test the weekly rebase automation workflow.
 
