@@ -19,10 +19,6 @@ This repo is used to test the weekly rebase automation workflow.
 ## Intel Private Notes
 - XPU SYCL backend optimized
 - Private CUDA path added
-<<<<<<< HEAD
-=======
-
 ## Intel Build Notes
 - Custom SYCL compiler integration
 - XPU device support matrix
->>>>>>> 16f274b (private: Add Intel changelog and XPU build notes to README)
