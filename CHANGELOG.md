@@ -8,12 +8,10 @@
 - Bug fixes
 - Performance improvements
 
-<<<<<<< HEAD
 ## v0.4.0 (2026-05-11)
 - Upstream: refactored build system
 - Upstream: added CI matrix
-=======
+
 ## Intel Internal v0.3.1
 - Added XPU profiling support
 - Intel-specific CI pipeline
->>>>>>> 16f274b (private: Add Intel changelog and XPU build notes to README)
