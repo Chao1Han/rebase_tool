@@ -46,13 +46,22 @@ def main():
         "",
         "### Conflict details",
         "",
+        "The conflicts below are organized **by commit step**. "
+        "Resolve them in order (Step 1 → Step 2 → ...). "
+        "Each step is one private commit being rebased onto upstream.",
+        "",
+        "Files marked ⚠️ **REPEATED** appear in multiple steps — "
+        "resolve earlier steps first as they affect later ones.",
+        "",
         report,
         "",
         "### Requirements",
         "",
         f"1. Resolve all conflict markers on `{conflict_branch}`",
-        "2. Prefer upstream, preserve Intel-specific code",
-        f"3. Open PR targeting `{base_branch}`, title: `Weekly rebase {date_tag} - conflict resolution`",
+        f"2. Work through each step in order (Step 1, Step 2, ...)",
+        f"3. For each step, commit with message: `Resolve conflicts: step N - <original commit message>`",
+        "4. Prefer upstream code. Preserve Intel-specific additions",
+        f"5. Open PR targeting `{base_branch}`, title: `Weekly rebase {date_tag} - conflict resolution`",
     ]
     body = "\n".join(body_lines)
 

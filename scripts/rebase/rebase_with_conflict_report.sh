@@ -40,6 +40,10 @@ is_in_auto_resolve_list() {
 # Initialize report
 : > "$REPORT_FILE"
 HAS_UNRESOLVED_CONFLICTS=false
+CONFLICT_STEP=0
+# Track per-file conflict count (file -> count mapping via temp file)
+FILE_CONFLICT_LOG=$(mktemp)
+: > "$FILE_CONFLICT_LOG"
 
 # Attempt rebase
 if ! git rebase "$REBASE_TARGET"; then
@@ -62,28 +66,39 @@ if ! git rebase "$REBASE_TARGET"; then
 
         if [[ ${#UNHANDLED_FILES[@]} -gt 0 ]]; then
             HAS_UNRESOLVED_CONFLICTS=true
-            echo "=== Unresolvable conflicts found, force-continuing to preserve linear history ==="
+            CONFLICT_STEP=$((CONFLICT_STEP + 1))
+            echo "=== Unresolvable conflicts found (step $CONFLICT_STEP), force-continuing to preserve linear history ==="
 
             # Get current rebase commit info
             CURRENT_COMMIT=$(cat .git/rebase-merge/stopped-sha 2>/dev/null || echo "unknown")
             COMMIT_MSG=$(git log --format='%s' -1 "$CURRENT_COMMIT" 2>/dev/null || echo "unknown")
 
-            # Write report
+            # Record per-file conflict occurrences
+            for file in "${UNHANDLED_FILES[@]}"; do
+                echo "$file" >> "$FILE_CONFLICT_LOG"
+            done
+
+            # Write per-commit section
             {
-                echo "### Conflicting Commit"
+                echo "## Step $CONFLICT_STEP: \`$CURRENT_COMMIT\`"
                 echo ""
-                echo "- **SHA:** \`$CURRENT_COMMIT\`"
                 echo "- **Message:** $COMMIT_MSG"
-                echo ""
-                echo "### Conflicted Files"
+                echo "- **Files:** ${#UNHANDLED_FILES[@]}"
                 echo ""
                 for file in "${UNHANDLED_FILES[@]}"; do
-                    echo "#### \`$file\`"
+                    # Check if this file has appeared in earlier steps
+                    PREV_COUNT=$(head -n -${#UNHANDLED_FILES[@]} "$FILE_CONFLICT_LOG" 2>/dev/null | grep -cxF "$file" || true)
+                    REPEAT_TAG=""
+                    if [[ "$PREV_COUNT" -gt 0 ]]; then
+                        REPEAT_TAG=" ⚠️ **REPEATED** (conflict #$((PREV_COUNT + 1)) for this file)"
+                    fi
+                    echo "### \`$file\`${REPEAT_TAG}"
                     echo ""
-                    echo '<details><summary>Conflict diff</summary>'
+                    echo '<details><summary>Conflict markers</summary>'
                     echo ""
                     echo '```diff'
-                    head -200 "$file" 2>/dev/null || echo "(file not readable)"
+                    # Show only the conflict regions, not the entire file
+                    grep -n -A5 -B2 "^<<<<<<< \|^=======$\|^>>>>>>> " "$file" 2>/dev/null | head -200 || head -200 "$file" 2>/dev/null || echo "(file not readable)"
                     echo '```'
                     echo ""
                     echo '</details>'
@@ -110,8 +125,35 @@ if ! git rebase "$REBASE_TARGET"; then
 fi
 
 if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
-    # Append summary to report
+    # Generate multi-conflict file summary
+    MULTI_CONFLICT_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq -c | sort -rn | awk '$1 > 1 {print $1, $2}')
     {
+        if [[ -n "$MULTI_CONFLICT_FILES" ]]; then
+            echo "## ⚠️ Multi-Conflict Files (resolve with extra care)"
+            echo ""
+            echo "These files had conflicts in **multiple commits**. Later conflict markers may depend on how earlier ones were resolved. Process them **in step order**."
+            echo ""
+            echo "| File | Conflict Count |"
+            echo "|------|---------------|"
+            while IFS=' ' read -r count file; do
+                echo "| \`$file\` | $count |"
+            done <<< "$MULTI_CONFLICT_FILES"
+            echo ""
+        fi
+
+        echo "## Resolution Instructions"
+        echo ""
+        echo "Resolve conflicts **one step at a time, in order** (Step 1 → Step 2 → ...). Each step corresponds to one private commit being rebased onto upstream."
+        echo ""
+        echo "For each step:"
+        echo "1. Find and resolve all \`<<<<<<<\` / \`=======\` / \`>>>>>>>\` markers in the listed files"
+        echo "2. Prefer upstream code. Preserve Intel-specific additions"
+        echo "3. Commit with message: \`Resolve conflicts: step N - <original commit message>\`"
+        echo ""
+        if [[ -n "$MULTI_CONFLICT_FILES" ]]; then
+            echo "> **⚠️ Important:** Files marked as **REPEATED** appear in multiple steps. Your resolution in an earlier step affects the conflict in later steps. Resolve strictly in order."
+            echo ""
+        fi
         echo "### How to reproduce locally"
         echo ""
         echo '```bash'
@@ -122,10 +164,12 @@ if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
         echo '```'
     } >> "$REPORT_FILE"
 
-    echo "Rebase completed (linear) but with conflict markers."
+    rm -f "$FILE_CONFLICT_LOG"
+    echo "Rebase completed (linear) but with conflict markers ($CONFLICT_STEP steps)."
     echo "Conflict report written to $REPORT_FILE"
     exit 2
 fi
 
+rm -f "$FILE_CONFLICT_LOG"
 echo "Rebase completed successfully."
 exit 0
