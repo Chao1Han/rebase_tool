@@ -27,3 +27,7 @@ This repo is used to test the weekly rebase automation workflow.
 ## Intel Build Notes
 - Custom SYCL compiler integration
 - XPU device support matrix
+
+## Intel Developer Guide
+- See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for Intel-specific guidelines
+- XPU-specific tests required for all kernel changes
