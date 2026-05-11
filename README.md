@@ -1,17 +1,12 @@
-<<<<<<< HEAD
-# Rebase Tool Test Repo (upstream v3.0)
-=======
-# Rebase Tool Test Repo (Intel Edition)
->>>>>>> 37828a4 (private: Update README header with Intel branding and config)
+# Intel Rebase Tool Test Repo (forked from upstream v3.0)
 
 This repo is used to test the weekly rebase automation workflow.
 
 ## Configuration
 - line-length = 120
 - target-version = py310
-<<<<<<< HEAD
-<<<<<<< HEAD
 - upstream-added = true
+- intel-private = true
 
 ## Upstream v2.0 Release Notes
 - Refactored hello interface
@@ -24,26 +19,15 @@ This repo is used to test the weekly rebase automation workflow.
 ## Contributing
 - See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines
 - PRs welcome!
-=======
-=======
-- intel-private = true
->>>>>>> 37828a4 (private: Update README header with Intel branding and config)
 
 ## Intel Private Notes
 - XPU SYCL backend optimized
 - Private CUDA path added
-<<<<<<< HEAD
->>>>>>> 1718d70 (Add Intel private development notes)
-=======
 
 ## Intel Build Notes
 - Custom SYCL compiler integration
 - XPU device support matrix
-<<<<<<< HEAD
->>>>>>> 16f274b (private: Add Intel changelog and XPU build notes to README)
-=======
 
 ## Intel Developer Guide
 - See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for Intel-specific guidelines
 - XPU-specific tests required for all kernel changes
->>>>>>> 8e98150 (private: Add Intel developer guide section to README)
