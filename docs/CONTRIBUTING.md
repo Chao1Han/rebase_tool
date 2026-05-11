@@ -1,4 +1,4 @@
-# Contributing
+# Contributing (Upstream + Intel)
 
 ## Code Style
 - Use black formatter
