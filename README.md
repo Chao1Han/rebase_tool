@@ -14,3 +14,7 @@ This repo is used to test the weekly rebase automation workflow.
 ## Upstream Build Notes
 - Build system migrated to CMake
 - CI matrix expanded
+
+## Contributing
+- See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines
+- PRs welcome!
