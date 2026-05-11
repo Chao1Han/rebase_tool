@@ -1,4 +1,4 @@
-# Rebase Tool Test Repo (upstream v3.0)
+# Rebase Tool Test Repo (upstream v3.0, Intel Edition)
 
 This repo is used to test the weekly rebase automation workflow.
 
@@ -6,6 +6,7 @@ This repo is used to test the weekly rebase automation workflow.
 - line-length = 120
 - target-version = py310
 - upstream-added = true
+- intel-private = true
 
 ## Upstream v2.0 Release Notes
 - Refactored hello interface
