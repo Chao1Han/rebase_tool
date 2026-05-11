@@ -10,3 +10,7 @@ This repo is used to test the weekly rebase automation workflow.
 ## Upstream v2.0 Release Notes
 - Refactored hello interface
 - CUDA improvements
+
+## Upstream Build Notes
+- Build system migrated to CMake
+- CI matrix expanded
