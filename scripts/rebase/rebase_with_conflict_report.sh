@@ -44,6 +44,8 @@ CONFLICT_STEP=0
 # Track per-file conflict count (file -> count mapping via temp file)
 FILE_CONFLICT_LOG=$(mktemp)
 : > "$FILE_CONFLICT_LOG"
+# GitHub commit link base (available in Actions, fallback for local)
+COMMIT_URL_BASE="${GITHUB_SERVER_URL:-https://github.com}/${REPO_NAME}/commit"
 
 # Attempt rebase
 if ! git rebase "$REBASE_TARGET"; then
@@ -78,30 +80,16 @@ if ! git rebase "$REBASE_TARGET"; then
                 echo "$file" >> "$FILE_CONFLICT_LOG"
             done
 
-            # Write per-step detail section
+            # Write per-step detail section (commit link + file list, no markers)
             {
-                echo "### Step $CONFLICT_STEP — Commit \`${CURRENT_COMMIT:0:10}\`"
+                echo "### Step $CONFLICT_STEP — [\`${CURRENT_COMMIT:0:10}\`](${COMMIT_URL_BASE}/${CURRENT_COMMIT})"
                 echo ""
                 echo "- **Message:** $COMMIT_MSG"
-                echo ""
+                echo "- **Files:**"
                 for file in "${UNHANDLED_FILES[@]}"; do
-                    # Check if this file has appeared in earlier steps
-                    PREV_COUNT=$(head -n -${#UNHANDLED_FILES[@]} "$FILE_CONFLICT_LOG" 2>/dev/null | grep -cxF "$file" || true)
-                    REPEAT_TAG=""
-                    if [[ "$PREV_COUNT" -gt 0 ]]; then
-                        REPEAT_TAG=" ⚠️ **REPEATED** (conflict #$((PREV_COUNT + 1)) for this file)"
-                    fi
-                    echo "#### \`$file\`${REPEAT_TAG}"
-                    echo ""
-                    echo '<details><summary>Conflict markers</summary>'
-                    echo ""
-                    echo '```diff'
-                    grep -n -A5 -B2 "^<<<<<<< \|^=======$\|^>>>>>>> " "$file" 2>/dev/null | head -200 || head -200 "$file" 2>/dev/null || echo "(file not readable)"
-                    echo '```'
-                    echo ""
-                    echo '</details>'
-                    echo ""
+                    echo "  - \`$file\`"
                 done
+                echo ""
                 echo "---"
                 echo ""
             } >> "$REPORT_FILE"
@@ -123,27 +111,32 @@ if ! git rebase "$REBASE_TARGET"; then
 fi
 
 if [[ "$HAS_UNRESOLVED_CONFLICTS" == true ]]; then
-    # Prepend multi-conflict summary to the top of report (before per-step details)
-    MULTI_CONFLICT_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq -c | sort -rn | awk '$1 > 1 {print $1, $2}')
-    if [[ -n "$MULTI_CONFLICT_FILES" ]]; then
-        SUMMARY=$(mktemp)
-        {
-            echo "## ⚠️ Multi-Conflict Files"
-            echo ""
-            echo "These files had conflicts in **multiple steps**. Resolve them strictly in step order."
-            echo ""
-            echo "| File | Conflict Count |"
-            echo "|------|---------------|"
+    # Prepend all-files summary to the top of report
+    ALL_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq)
+    SUMMARY=$(mktemp)
+    {
+        echo "## All Conflicting Files (full merge view)"
+        echo ""
+        echo "The following files have conflicts across all upstream commits:"
+        echo ""
+        while IFS= read -r file; do
+            echo "- \`$file\`"
+        done <<< "$ALL_FILES"
+        echo ""
+        # Multi-conflict warning if any file appears more than once
+        MULTI_CONFLICT_FILES=$(sort "$FILE_CONFLICT_LOG" | uniq -c | sort -rn | awk '$1 > 1 {print $1, $2}')
+        if [[ -n "$MULTI_CONFLICT_FILES" ]]; then
+            echo "> ⚠️ **Multi-conflict files** (resolve strictly in step order):"
             while IFS=' ' read -r count file; do
-                echo "| \`$file\` | $count |"
+                echo "> - \`$file\` — $count steps"
             done <<< "$MULTI_CONFLICT_FILES"
             echo ""
-            echo "---"
-            echo ""
-        } > "$SUMMARY"
-        cat "$REPORT_FILE" >> "$SUMMARY"
-        mv "$SUMMARY" "$REPORT_FILE"
-    fi
+        fi
+        echo "---"
+        echo ""
+    } > "$SUMMARY"
+    cat "$REPORT_FILE" >> "$SUMMARY"
+    mv "$SUMMARY" "$REPORT_FILE"
 
     # Append reproduce steps
     {
