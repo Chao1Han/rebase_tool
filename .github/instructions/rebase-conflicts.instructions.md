@@ -94,6 +94,20 @@ If an exception applies, describe the reason and the approving owner(s) in the P
 - If upstream changed the same kernel's logic, apply Intel's refactoring pattern
   to the new upstream logic
 
+## Multi-Step Conflict Resolution
+
+During rebase, the same file may conflict in multiple commits (steps).
+The issue will flag these as **Multi-Conflict Files** with a conflict count.
+
+When resolving:
+
+1. Work through each step **in order** (Step 1 → Step 2 → ...).
+   Each step corresponds to one private commit being rebased onto upstream.
+2. For each step, resolve all `<<<<<<<` / `=======` / `>>>>>>>` markers.
+3. Commit with message: `Resolve conflicts: step N - <original commit message>`
+4. **Multi-conflict files**: Your resolution in step N affects the markers in step N+1.
+   Always resolve earlier steps first.
+
 ## After Resolution
 
 - Open a PR targeting the branch specified in the issue (`main` or `dev/upstream`)
