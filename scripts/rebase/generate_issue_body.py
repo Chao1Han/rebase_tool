@@ -44,14 +44,18 @@ def main():
         f"**Conflict branch:** `{conflict_branch}`",
         f"**Target branch:** `{base_branch}`",
         "",
+        "### Conflict details",
+        "",
         report,
         "",
         "### Task",
         "",
         f"1. Resolve all conflict markers (`<<<<<<<` / `=======` / `>>>>>>>`) on `{conflict_branch}`",
-        f"2. Open PR targeting `{base_branch}`, title: `Weekly rebase {date_tag} - conflict resolution`",
+        f"2. Prefer upstream code, preserve Intel-specific additions",
+        f"3. For each step, commit separately: `Resolve conflicts: step N - <original commit message>`",
+        f"4. Open PR targeting `{base_branch}`, title: `Weekly rebase {date_tag} - conflict resolution`",
         "",
-        "See `.github/instructions/rebase-conflicts.instructions.md` for resolution rules and multi-conflict file handling.",
+        "See `.github/instructions/rebase-conflicts.instructions.md` for resolution rules.",
     ]
     body = "\n".join(body_lines)
 
