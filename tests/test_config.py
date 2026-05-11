@@ -1,10 +1,41 @@
-"""Test configuration validation."""
+"""Tests for the repository Ruff configuration."""
+
+from pathlib import Path
+import tomllib
+
+
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.toml"
+
+
+def load_config():
+    """Load the checked-in Ruff configuration from the repository root."""
+    assert CONFIG_PATH.is_file(), f"Missing config file: {CONFIG_PATH}"
+    try:
+        return tomllib.loads(CONFIG_PATH.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        raise AssertionError(f"config.toml must be valid TOML: {exc}") from exc
+
 
 def test_line_length():
-    """Ensure line-length setting is valid."""
-    assert 80 <= 120, "line-length must be reasonable"
+    """Ensure the configured line length stays within the expected range."""
+    line_length = load_config()["tool"]["ruff"]["line-length"]
+    assert isinstance(line_length, int), "line-length must be an integer"
+    assert 80 <= line_length <= 120, "line-length must be reasonable"
+
 
 def test_target_version():
-    """Ensure target-version is supported."""
+    """Ensure the configured target-version is supported."""
     supported = ["py38", "py39", "py310", "py311", "py312"]
-    assert "py310" in supported
+    target_version = load_config()["tool"]["ruff"]["target-version"]
+    assert target_version in supported
+
+
+def test_optional_ruff_format_settings_are_compatible():
+    """The private config may omit Ruff format settings; if present, they must match the reviewed values."""
+    format_config = load_config()["tool"]["ruff"].get("format")
+    assert format_config is None or isinstance(format_config, dict)
+    if format_config is None:
+        return
+
+    assert format_config["quote-style"] == "double"
+    assert format_config["indent-style"] == "space"
